@@ -9,6 +9,10 @@ import './modals.js';
 document.getElementById('saveBtn').addEventListener('click',saveSettings);
 document.getElementById('validateBtn').addEventListener('click',validateHealth);
 document.getElementById('refreshBtn').addEventListener('click',loadAll);
+document.getElementById('logoutBtn')?.addEventListener('click',async()=>{
+  await fetch('/api/auth/logout',{method:'POST'});
+  location.href='/login.html';
+});
 document.getElementById('periodFilter').addEventListener('change',e=>{
   APP.filters.period=e.target.value;
   if(e.target.value!=='all'){ APP.filters.month='all'; const mf=document.getElementById('monthFilter'); if(mf) mf.value='all'; }

@@ -180,6 +180,41 @@ button,input,textarea,select{font:inherit;color:inherit}
 .mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mt20{margin-top:20px}
 .mb12{margin-bottom:12px}.mb16{margin-bottom:16px}.mb20{margin-bottom:20px}.mb24{margin-bottom:24px}
 
+/* Login */
+.login-page{
+  min-height:100vh;
+  display:grid;
+  place-items:center;
+  padding:24px;
+  background:var(--bg);
+}
+.login-panel{
+  width:min(420px,100%);
+  background:var(--s1);
+  border:1px solid var(--border);
+  border-radius:var(--r);
+  padding:28px;
+  box-shadow:0 20px 50px rgba(0,0,0,.22);
+}
+.login-panel h1{
+  font-family:var(--font-h);
+  font-size:24px;
+  margin:22px 0 8px;
+}
+.login-panel p{
+  color:var(--muted);
+  font-size:14px;
+  line-height:1.5;
+  margin:0 0 22px;
+}
+.login-message{
+  margin-top:16px;
+  min-height:18px;
+  color:var(--muted);
+  font-size:12px;
+}
+.login-message.error{color:var(--expense)}
+
 /* Cor especifica de Cartão de Crédito (violeta — neutra, sofisticada) */
 .c-cc{color:var(--cc)}
 

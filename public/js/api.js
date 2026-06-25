@@ -123,5 +123,81 @@ async function generateConnectToken(){
   box.textContent=r.json.connectToken||r.json.accessToken||r.json.token||JSON.stringify(r.json);
 }
 
+function getConnectAccessToken(payload){
+  return payload?.accessToken || payload?.connectToken || payload?.token;
+}
 
-export { fetchJson, loadSettings, validateHealth, loadAll, saveSettings, generateConnectToken };
+function extractConnectedItemId(itemData){
+  return itemData?.item?.id || itemData?.itemId || itemData?.id || itemData?.data?.itemId || itemData?.data?.item?.id || null;
+}
+
+async function persistConnectedItem(itemData){
+  const itemId = extractConnectedItemId(itemData);
+  if(!itemId) return false;
+  const current = APP.raw.settings || {};
+  const itemIds = [...new Set([...(current.itemIds||[]), itemId])];
+  const payload = {
+    clientUserId: current.clientUserId || '',
+    webhookUrl: current.webhookUrl || '',
+    itemIds
+  };
+  const r = await fetchJson('/api/admin/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!r.ok) throw new Error(r.json.message || 'Falha ao salvar item conectado');
+  APP.raw.settings = r.json.settings;
+  return true;
+}
+
+async function openPluggyConnect(){
+  const box=document.getElementById('tokenBox');
+  if(box) box.textContent='Abrindo Pluggy Connect...';
+  const r=await fetchJson('/api/connect-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+  if(!r.ok){
+    if(box) box.textContent=`Erro: ${r.json.message||'falha ao gerar token'}`;
+    return;
+  }
+  const connectToken=getConnectAccessToken(r.json);
+  if(!connectToken){
+    if(box) box.textContent='Token retornado pela Pluggy nao contem accessToken.';
+    return;
+  }
+
+  try{
+    const [{ default: React }, { createRoot }, connectModule] = await Promise.all([
+      import('https://esm.sh/react@18.3.1'),
+      import('https://esm.sh/react-dom@18.3.1/client'),
+      import('https://esm.sh/react-pluggy-connect?external=react,react-dom')
+    ]);
+    const PluggyConnect = connectModule.PluggyConnect || connectModule.default;
+    if(!PluggyConnect) throw new Error('Componente PluggyConnect nao encontrado');
+
+    const host=document.createElement('div');
+    host.id='pluggyConnectHost';
+    document.body.appendChild(host);
+    let root;
+    const close=()=>{ try{ root?.unmount(); }catch{} host.remove(); };
+    root=createRoot(host);
+    root.render(React.createElement(PluggyConnect,{
+      connectToken,
+      includeSandbox:true,
+      onSuccess:async (itemData)=>{
+        try{
+          await persistConnectedItem(itemData);
+          if(box) box.textContent='Conta conectada. Sincronizando dados...';
+          close();
+          await loadAll();
+        }catch(e){
+          if(box) box.textContent=`Conectou, mas falhou ao salvar item: ${e.message}`;
+        }
+      },
+      onError:(error)=>{
+        if(box) box.textContent=`Falha na conexao: ${error?.message||error||'erro desconhecido'}`;
+        close();
+      },
+      onClose:close
+    }));
+  }catch(error){
+    if(box) box.textContent=`Widget indisponivel. Use este connect token manualmente: ${connectToken}`;
+  }
+}
+
+export { fetchJson, loadSettings, validateHealth, loadAll, saveSettings, generateConnectToken, openPluggyConnect };

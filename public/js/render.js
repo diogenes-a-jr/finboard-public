@@ -2,7 +2,7 @@ import { APP, NAV, esc, escAttr, fmtBRL, fmtShort, fmtDate, monthKey, monthLabel
 import { STORAGE_KEYS, ALL_STORAGE_KEYS, NAMES_KEY, GROUPS_KEY, CAT_NAMES_KEY, MANUAL_CARDS_KEY, MANUAL_CARD_TXS_KEY, EXCL_CATS_KEY, INV_CATS_KEY, MANUAL_INVS_KEY, STORAGE_CACHE, STORAGE_PENDING, STORAGE_STATE, storageDefault, storageGet, storageSet, _storagePushKey, bootStorage, storageResyncAll, updateStorageBanner, getRules, saveRules, getManual, saveManual, getCustomNames, saveCustomNames, getCatGroups, saveCatGroups, getManualCards, saveManualCards, getManualCardTxs, saveManualCardTxs, getExclCats, saveExclCats, getCatNames, saveCatNames, getInvCats, saveInvCats, getManualInvs, saveManualInvs, exportAllStorage, importAllStorage, applyCatGroups } from './storage.js';
 import { ruleBasedCategory, normalizeData, INVEST_CAT_PATTERNS, TRANSFER_CAT_PATTERNS, INVEST_ACCOUNT_TYPES, isInvestTx, filteredTransactions, filteredFinTransactions, filteredTransactionsAllMonths, populateFilters, monthlyCashflow, monthlyInvested, isCreditCardPayment, monthlyCardInvoices, topCategories } from './normalize.js';
 import { svgCashflow, svgArea, svgBar, empty, kpi, chip, badge2, txTable, accFlowChart, ccEvolutionChart } from './charts.js';
-import { fetchJson, loadSettings, validateHealth, loadAll, saveSettings, generateConnectToken } from './api.js';
+import { fetchJson, loadSettings, validateHealth, loadAll, saveSettings, generateConnectToken, openPluggyConnect } from './api.js';
 import { openModal, closeModal } from './modals.js';
 
 // Substitui handler anterior em vez de empilhar. Evita save N× quando o
@@ -2374,7 +2374,8 @@ function renderAdmin(){
     <div class="litem"><div><div class="lname">Client Secret</div><div class="lmeta">${esc(s.clientSecretMasked||'Não configurado')}</div></div></div>
     <div class="litem"><div><div class="lname">Item IDs</div><div class="lmeta">${(s.itemIds||[]).length} item(s)</div></div></div>
     <div class="mt16">
-      <button class="btn primary" id="newTokenBtn">Gerar connect token</button>
+      <button class="btn primary" id="openConnectBtn">Conectar banco</button>
+      <button class="btn" id="newTokenBtn" style="margin-left:8px">Gerar token manual</button>
       <div id="tokenBox" style="margin-top:12px;font-size:12px;color:var(--muted);word-break:break-all"></div>
     </div>
   </div>
@@ -2396,6 +2397,7 @@ function renderAdmin(){
     O backup baixa um arquivo <code>finboard-backup-AAAA-MM-DD-HH-MM-SS.json</code>. Guarde junto com o <code>data.db</code> se for migrar de máquina. A restauração <b>substitui</b> os dados atuais &mdash; pede confirmação antes.
   </div>
 </div>`;
+  bindClick('openConnectBtn', openPluggyConnect);
   bindClick('newTokenBtn', generateConnectToken);
   bindClick('adminExportBtn', () => {
     try {

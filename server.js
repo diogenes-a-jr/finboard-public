@@ -13,9 +13,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 const PLUGGY_BASE_URL = process.env.PLUGGY_BASE_URL || "https://api.pluggy.ai";
-const SETTINGS_PATH = path.join(__dirname, "settings.json");
+const APP_BASE_URL = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+const SETTINGS_PATH = process.env.SETTINGS_PATH || path.join(__dirname, "settings.json");
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data.db");
+const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || "";
+const BASIC_AUTH_PASSWORD = process.env.BASIC_AUTH_PASSWORD || "";
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
+const GOOGLE_ALLOWED_EMAILS = String(process.env.GOOGLE_ALLOWED_EMAILS || "")
+  .split(",")
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
+const REQUIRE_LOGIN = process.env.FINBOARD_REQUIRE_LOGIN === "true" || process.env.NODE_ENV === "production";
+const SESSION_COOKIE_NAME = "finboard_session";
 
 // ─── App token (obrigatório) ─────────────────────────────────────────────────
 // Protege todas as rotas /api/*. Frontend recebe o token via cookie httpOnly
@@ -48,6 +59,72 @@ function timingSafeEq(a, b) {
   const bb = Buffer.from(String(b || ""));
   if (ba.length === 0 || ba.length !== bb.length) return false;
   return crypto.timingSafeEqual(ba, bb);
+}
+
+function base64url(input) {
+  return Buffer.from(input).toString("base64url");
+}
+
+function jsonBase64url(data) {
+  return base64url(JSON.stringify(data));
+}
+
+function signSession(payload) {
+  const body = jsonBase64url(payload);
+  const sig = crypto.createHmac("sha256", APP_TOKEN).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+function readSession(req) {
+  const raw = parseCookies(req)[SESSION_COOKIE_NAME];
+  if (!raw || !raw.includes(".")) return null;
+  const [body, sig] = raw.split(".");
+  const expected = crypto.createHmac("sha256", APP_TOKEN).update(body).digest("base64url");
+  if (!timingSafeEq(sig, expected)) return null;
+  try {
+    const session = JSON.parse(Buffer.from(body, "base64url").toString("utf-8"));
+    if (!session.email || !session.exp || session.exp < Date.now()) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function setSessionCookie(res, user) {
+  const maxAgeSeconds = 7 * 24 * 60 * 60;
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const session = {
+    email: user.email,
+    name: user.name || "",
+    picture: user.picture || "",
+    exp: Date.now() + maxAgeSeconds * 1000,
+  };
+  res.setHeader(
+    "Set-Cookie",
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(signSession(session))}; Path=/; SameSite=Lax; HttpOnly${secure}; Max-Age=${maxAgeSeconds}`
+  );
+}
+
+function clearSessionCookie(res) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; Path=/; SameSite=Lax; HttpOnly${secure}; Max-Age=0`);
+}
+
+async function verifyGoogleIdToken(idToken) {
+  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error_description || payload.error || "Token Google invalido");
+  if (payload.aud !== GOOGLE_CLIENT_ID) throw new Error("Token Google emitido para outro client_id");
+  if (!["accounts.google.com", "https://accounts.google.com"].includes(payload.iss)) {
+    throw new Error("Emissor Google invalido");
+  }
+  if (Number(payload.exp || 0) * 1000 < Date.now()) throw new Error("Token Google expirado");
+  const email = String(payload.email || "").toLowerCase();
+  if (!email || payload.email_verified !== "true") throw new Error("Email Google nao verificado");
+  if (GOOGLE_ALLOWED_EMAILS.length && !GOOGLE_ALLOWED_EMAILS.includes(email)) {
+    throw new Error("Email nao autorizado para este FinBoard");
+  }
+  return { email, name: payload.name || "", picture: payload.picture || "" };
 }
 
 function requireAuth(req, res, next) {
@@ -84,6 +161,7 @@ const corsOptions = {
     // requests same-origin não têm header Origin: aceita
     if (!origin) return cb(null, true);
     const allowed = [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
+    if (APP_BASE_URL) allowed.push(APP_BASE_URL);
     if (allowed.includes(origin)) return cb(null, true);
     return cb(new Error("Origin não permitida"), false);
   },
@@ -91,6 +169,84 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "5mb" }));
+
+app.get('/api/healthz', (_req, res) => {
+  res.json({ ok: true, service: 'finboard' });
+});
+
+app.get('/api/auth/config', (_req, res) => {
+  res.json({
+    googleClientId: GOOGLE_CLIENT_ID,
+    enabled: REQUIRE_LOGIN && !!GOOGLE_CLIENT_ID,
+  });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  const session = readSession(req);
+  res.json({ ok: true, authenticated: !!session, user: session ? { email: session.email, name: session.name, picture: session.picture } : null });
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    if (!GOOGLE_CLIENT_ID) throw new Error("GOOGLE_CLIENT_ID nao configurado");
+    const credential = req.body?.credential;
+    if (!credential) return res.status(400).json({ ok: false, message: "Credential ausente" });
+    const user = await verifyGoogleIdToken(credential);
+    setSessionCookie(res, user);
+    res.json({ ok: true, user });
+  } catch (error) {
+    res.status(401).json({ ok: false, message: error.message });
+  }
+});
+
+app.post('/api/auth/logout', (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+function requireLogin(req, res, next) {
+  if (!REQUIRE_LOGIN) return next();
+  if (req.path === "/api/webhooks/pluggy") return next();
+  if (req.path === "/api/healthz") return next();
+  if (req.path.startsWith("/api/auth/")) return next();
+  if (req.path === "/login.html" || req.path === "/js/auth.js" || req.path === "/styles.css") return next();
+
+  if (GOOGLE_CLIENT_ID) {
+    const session = readSession(req);
+    if (session) {
+      req.user = session;
+      return next();
+    }
+    if (req.path.startsWith("/api/")) return res.status(401).json({ ok: false, message: "Login Google requerido" });
+    return res.redirect("/login.html");
+  }
+
+  if (!BASIC_AUTH_USER || !BASIC_AUTH_PASSWORD) {
+    return res.status(500).send("Configure GOOGLE_CLIENT_ID ou BASIC_AUTH_USER/BASIC_AUTH_PASSWORD no deploy.");
+  }
+  const header = req.headers.authorization || "";
+  const [scheme, encoded] = header.split(" ");
+  if (scheme !== "Basic" || !encoded) {
+    res.setHeader("WWW-Authenticate", 'Basic realm="FinBoard"');
+    return res.status(401).send("Autenticacao requerida");
+  }
+  let user = "";
+  let password = "";
+  try {
+    const decoded = Buffer.from(encoded, "base64").toString("utf-8");
+    const idx = decoded.indexOf(":");
+    user = decoded.slice(0, idx);
+    password = decoded.slice(idx + 1);
+  } catch {
+    res.setHeader("WWW-Authenticate", 'Basic realm="FinBoard"');
+    return res.status(401).send("Autenticacao requerida");
+  }
+  if (timingSafeEq(user, BASIC_AUTH_USER) && timingSafeEq(password, BASIC_AUTH_PASSWORD)) return next();
+  res.setHeader("WWW-Authenticate", 'Basic realm="FinBoard"');
+  return res.status(401).send("Autenticacao requerida");
+}
+
+app.use(requireLogin);
 
 // ─── Servir o frontend ───────────────────────────────────────────────────────
 // Servimos a pasta public/ inteira (index.html, styles.css, js/*.js). Como ela
@@ -133,10 +289,11 @@ function readSettings() {
 
 function writeSettingsSafe(data) {
   // Nunca grava clientId/clientSecret em settings.json — eles ficam só no .env.
+  const current = readSettings();
   const safe = {
-    itemIds: Array.isArray(data.itemIds) ? data.itemIds : [],
-    clientUserId: data.clientUserId || "",
-    webhookUrl: data.webhookUrl || "",
+    itemIds: Array.isArray(data.itemIds) ? data.itemIds : current.itemIds,
+    clientUserId: data.clientUserId ?? current.clientUserId ?? "",
+    webhookUrl: data.webhookUrl ?? current.webhookUrl ?? "",
   };
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(safe, null, 2) + "\n", "utf-8");
 }
@@ -260,6 +417,69 @@ async function fetchItems(itemIds) {
   }));
 }
 
+async function createConnectToken({ clientUserId, itemId } = {}) {
+  const s = readSettings();
+  const body = {
+    clientUserId: clientUserId || s.clientUserId || undefined,
+    itemId: itemId || undefined,
+    webhookUrl: s.webhookUrl || undefined,
+    avoidDuplicates: true,
+  };
+  const data = await pluggyFetch('/connect_token', { method: 'POST', body: JSON.stringify(body) });
+  const accessToken = data.accessToken || data.connectToken || data.token;
+  return { accessToken, ...data };
+}
+
+function extractWebhookItemId(event) {
+  return event?.itemId || event?.item?.id || event?.data?.itemId || event?.data?.item?.id || null;
+}
+
+function addItemIdToSettings(itemId) {
+  if (!itemId) return false;
+  const s = readSettings();
+  if (s.itemIds.includes(itemId)) return false;
+  writeSettingsSafe({ itemIds: [...s.itemIds, itemId] });
+  return true;
+}
+
+function rememberWebhookEvent(event) {
+  const key = "pluggy_webhook_events_v1";
+  let events = [];
+  const row = stmtGet.get(key);
+  if (row) {
+    try { events = JSON.parse(row.value); } catch { events = []; }
+  }
+  events.unshift({
+    receivedAt: new Date().toISOString(),
+    event: event?.event || event?.type || "unknown",
+    eventId: event?.eventId || event?.id || null,
+    itemId: extractWebhookItemId(event),
+  });
+  stmtPut.run(key, JSON.stringify(events.slice(0, 50)), Date.now());
+}
+
+app.post('/api/webhooks/pluggy', (req, res) => {
+  try {
+    const event = req.body || {};
+    rememberWebhookEvent(event);
+    const type = event.event || event.type;
+    if (type === 'item/created' || type === 'item/updated') {
+      addItemIdToSettings(extractWebhookItemId(event));
+    }
+    if (type === 'item/error') {
+      console.warn('Pluggy item error webhook:', {
+        eventId: event.eventId || event.id,
+        itemId: extractWebhookItemId(event),
+        error: event.error || event.data?.error,
+      });
+    }
+    return res.json({ received: true });
+  } catch (error) {
+    console.error('Pluggy webhook failed:', error);
+    return res.status(500).json({ received: false, message: error.message });
+  }
+});
+
 // ═════════════════════════════════════════════════════════════════════════
 // Todas as rotas /api/* exigem o cookie/header de auth
 // ═════════════════════════════════════════════════════════════════════════
@@ -317,15 +537,20 @@ app.get('/api/health', async (_req, res) => {
 
 app.get('/api/connect-token', async (req, res) => {
   try {
-    const s = readSettings();
-    const body = {
-      clientUserId: req.query.clientUserId || s.clientUserId || undefined,
-      itemId: req.query.itemId || undefined,
-      webhookUrl: s.webhookUrl || undefined,
-      avoidDuplicates: true,
-    };
-    const data = await pluggyFetch('/connect_token', { method: 'POST', body: JSON.stringify(body) });
+    const data = await createConnectToken({
+      clientUserId: req.query.clientUserId,
+      itemId: req.query.itemId,
+    });
     res.json({ ok: true, ...data });
+  } catch (error) {
+    res.status(error.status || 500).json({ ok: false, message: error.message, details: error.payload || null });
+  }
+});
+
+app.post('/api/connect-token', async (req, res) => {
+  try {
+    const data = await createConnectToken(req.body || {});
+    res.json({ accessToken: data.accessToken, ok: true, ...data });
   } catch (error) {
     res.status(error.status || 500).json({ ok: false, message: error.message, details: error.payload || null });
   }
@@ -469,4 +694,4 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({ ok: false, message: err.message || 'Internal error' });
 });
 
-app.listen(PORT, () => console.log(`Pluggy all-in-one em http://localhost:${PORT}`));
+app.listen(PORT, HOST, () => console.log(`Pluggy all-in-one em http://${HOST}:${PORT}`));

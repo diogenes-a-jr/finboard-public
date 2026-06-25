@@ -15,13 +15,13 @@
   "description": "Dashboard de financas pessoais que consolida contas, cartoes, investimentos e emprestimos de varios bancos brasileiros numa unica tela, via Pluggy (Open Finance Brasil).",
   "author": "Alexandre Lavrador",
   "license": "MIT",
-  "homepage": "https://github.com/alelavrador/finboard-public#readme",
+  "homepage": "https://github.com/diogenes-a-jr/finboard-public#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alelavrador/finboard-public.git"
+    "url": "https://github.com/diogenes-a-jr/finboard-public.git"
   },
   "bugs": {
-    "url": "https://github.com/alelavrador/finboard-public/issues"
+    "url": "https://github.com/diogenes-a-jr/finboard-public/issues"
   },
   "keywords": [
     "finance",
