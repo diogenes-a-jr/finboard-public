@@ -128,6 +128,7 @@ async function verifyGoogleIdToken(idToken) {
 }
 
 function requireAuth(req, res, next) {
+  if (GOOGLE_CLIENT_ID && readSession(req)) return next();
   const cookies = parseCookies(req);
   const fromCookie = cookies[COOKIE_NAME];
   const fromHeader = req.headers["x-app-token"];
